@@ -22,6 +22,7 @@ export class Effects {
   private shellMat = new THREE.MeshStandardMaterial({ color: 0xd9a441, metalness: 0.95, roughness: 0.25 });
   private bulletHole: THREE.MeshBasicMaterial;
   private gooMat: THREE.MeshBasicMaterial;
+  private bloodMat: THREE.MeshBasicMaterial;
   private scorch: THREE.MeshBasicMaterial;
   onShellLand?: () => void;
 
@@ -47,6 +48,19 @@ export class Effects {
       }
       g.beginPath();
       g.arc(s / 2, s / 2, s * 0.2, 0, Math.PI * 2);
+      g.fill();
+    });
+    this.bloodMat = this.decalMat((g, s) => {
+      g.fillStyle = "rgba(120,12,28,0.92)";
+      for (let i = 0; i < 16; i++) {
+        const r = Math.random() * s * 0.16 + 3;
+        const a = Math.random() * Math.PI * 2, d = Math.random() * s * 0.32;
+        g.beginPath();
+        g.arc(s / 2 + Math.cos(a) * d, s / 2 + Math.sin(a) * d, r, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.beginPath();
+      g.arc(s / 2, s / 2, s * 0.18, 0, Math.PI * 2);
       g.fill();
     });
     this.scorch = this.decalMat((g, s) => {
@@ -127,6 +141,16 @@ export class Effects {
   gooSplat(x: number, z: number, size: number) {
     const y = this.groundAt(x, z);
     this.decal(new THREE.Vector3(x, y + 0.03, z), new THREE.Vector3(0, 1, 0), size, this.gooMat);
+  }
+
+  blood(pos: THREE.Vector3, dir: THREE.Vector3, amount: number, floorY: number) {
+    this.soft.emit({ pos, vel: dir, spread: 0.6, speed: [2, 7 * amount], life: [0.4, 1.0], size: [0.12, 0.05], color: 0x9a1028, color2: 0x3a050c, gravity: 16, floor: floorY, count: Math.round(22 * amount) });
+    this.soft.emit({ pos, vel: dir, spread: 1.2, speed: [0.5, 2], life: [0.3, 0.7], size: [0.25, 1.1 * amount], color: 0x6a0818, color2: 0x1a0206, alpha: 0.55, drag: 3, count: Math.round(6 * amount) });
+  }
+
+  bloodSplat(x: number, z: number, size: number) {
+    const y = this.groundAt(x, z);
+    this.decal(new THREE.Vector3(x, y + 0.03, z), new THREE.Vector3(0, 1, 0), size, this.bloodMat);
   }
 
   explosion(pos: THREE.Vector3, scale = 1) {
