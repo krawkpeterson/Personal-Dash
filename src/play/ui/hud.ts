@@ -199,7 +199,7 @@ export class Hud {
     ($(el, "i") as HTMLElement).style.width = `${Math.max(0, frac) * 100}%`;
   }
 
-  drawMinimap(px: number, pz: number, yaw: number, goblins: { x: number; z: number; boss: boolean }[], pickups: { x: number; z: number }[]) {
+  drawMinimap(px: number, pz: number, yaw: number, goblins: { x: number; z: number; boss: boolean; geezer?: boolean }[], pickups: { x: number; z: number }[]) {
     const g = this.mini.getContext("2d")!;
     const W = this.mini.width;
     const size = this.world.sizeMeters;
@@ -227,7 +227,7 @@ export class Hud {
       const dx = e.x - px, dz = e.z - pz;
       const d = Math.hypot(dx, dz);
       const cl = d > range * 0.95 ? (range * 0.95) / d : 1;
-      g.fillStyle = e.boss ? "#ff7a00" : "#ff2d55";
+      g.fillStyle = e.boss ? "#ff7a00" : e.geezer ? "#c45cff" : "#ff2d55";
       g.shadowColor = g.fillStyle;
       g.shadowBlur = 8;
       g.beginPath();
