@@ -1,6 +1,9 @@
 import * as THREE from "three";
+import { buildLittle22 } from "../weapons/little22.ts";
 
 export type GoblinKind = "grunt" | "runner" | "brute" | "shaman" | "king";
+export type HostileKind = GoblinKind | "geezer";
+export type Faction = "goblin" | "geezer";
 
 export interface GoblinRig {
   root: THREE.Group;
@@ -14,6 +17,7 @@ export interface GoblinRig {
   jaw: THREE.Object3D;
   eyeMat: THREE.MeshStandardMaterial;
   skinMat: THREE.MeshStandardMaterial;
+  muzzle?: THREE.Object3D;
 }
 
 const G = {
@@ -132,32 +136,34 @@ export function buildGoblin(kind: GoblinKind): GoblinRig {
 
   const handR = armR.userData.hand as THREE.Group;
   const handL = armL.userData.hand as THREE.Group;
-  if (kind === "runner") {
-    const d = m(G.dagger, M.steel, 0, -0.5, -0.05);
-    d.rotation.x = -0.3;
-    handR.add(d);
-    const d2 = d.clone();
-    handL.add(d2);
-  } else if (kind === "shaman") {
+  const gun = buildLittle22();
+  gun.root.scale.setScalar(kind === "brute" || kind === "king" ? 1.35 : 1.05);
+  gun.root.position.set(0.02, -0.4, -0.03);
+  gun.root.rotation.set(Math.PI / 2, 0, 0.12);
+  if (kind === "shaman") {
     const staff = m(G.staff, M.wood, 0, -0.32, -0.02);
-    handR.add(staff);
+    handL.add(staff);
     const orb = m(G.orb, new THREE.MeshStandardMaterial({ color: "#000", emissive: "#a94dff", emissiveIntensity: 5 }), 0, 0.42, -0.02);
-    handR.add(orb);
+    handL.add(orb);
     root.userData.orb = orb;
     const robe = m(G.robe, M.robe, 0, -0.28, 0);
     torso.add(robe);
+    handR.add(gun.root);
   } else {
-    const club = new THREE.Group();
-    club.position.set(0, -0.36, -0.02);
-    club.rotation.x = -1.2;
-    club.add(m(G.club, M.wood, 0, -0.3, 0));
-    for (let i = 0; i < 6; i++) {
-      const s = m(G.spike, kind === "king" ? M.gold : M.steel, Math.cos(i) * 0.09, -0.48 - (i % 3) * 0.07, Math.sin(i) * 0.09);
-      s.rotation.z = Math.cos(i) * -1.4;
-      s.rotation.x = Math.sin(i) * 1.4;
-      club.add(s);
+    if (kind === "king") {
+      const club = new THREE.Group();
+      club.position.set(0, -0.36, -0.02);
+      club.rotation.x = -1.2;
+      club.add(m(G.club, M.wood, 0, -0.3, 0));
+      for (let i = 0; i < 6; i++) {
+        const s = m(G.spike, M.gold, Math.cos(i) * 0.09, -0.48 - (i % 3) * 0.07, Math.sin(i) * 0.09);
+        s.rotation.z = Math.cos(i) * -1.4;
+        s.rotation.x = Math.sin(i) * 1.4;
+        club.add(s);
+      }
+      handL.add(club);
     }
-    handR.add(club);
+    handR.add(gun.root);
   }
 
   if (kind === "brute" || kind === "king") {
@@ -187,5 +193,5 @@ export function buildGoblin(kind: GoblinKind): GoblinRig {
   const legL = leg(-1), legR = leg(1);
   body.add(legL, legR);
 
-  return { root, body, torso, head, armL, armR, legL, legR, jaw, eyeMat, skinMat };
+  return { root, body, torso, head, armL, armR, legL, legR, jaw, eyeMat, skinMat, muzzle: gun.muzzle };
 }
