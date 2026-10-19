@@ -3,8 +3,10 @@ import type { AudioEngine } from "../audio/audio.ts";
 import type { Effects } from "../fx/effects.ts";
 import type { Player } from "../player/player.ts";
 import type { CollisionWorld } from "../world/collision.ts";
+import { roll22Damage } from "../weapons/little22.ts";
 import { FlowField } from "./flowField.ts";
-import { buildGoblin, type GoblinKind, type GoblinRig } from "./goblinModel.ts";
+import { buildGeezer } from "./geezerModel.ts";
+import { buildGoblin, type Faction, type GoblinKind, type GoblinRig, type HostileKind } from "./goblinModel.ts";
 
 export interface GoblinDef {
   hp: number;
@@ -20,18 +22,25 @@ export interface GoblinDef {
 }
 
 export const GOBLINS: Record<GoblinKind, GoblinDef> = {
-  grunt: { hp: 100, speed: 4.7, damage: 12, scale: 1, score: 100, attackRange: 1.8, windup: 0.45, cooldown: 1.1, name: "Grunt", voice: 1 },
-  runner: { hp: 55, speed: 8.4, damage: 7, scale: 0.82, score: 120, attackRange: 1.6, windup: 0.25, cooldown: 0.7, name: "Sneak", voice: 1.35 },
-  brute: { hp: 440, speed: 3.2, damage: 28, scale: 1.75, score: 400, attackRange: 2.9, windup: 0.7, cooldown: 1.6, name: "Brute", voice: 0.6 },
+  grunt: { hp: 100, speed: 4.7, damage: 12, scale: 1, score: 100, attackRange: 24, windup: 0.22, cooldown: 0.85, name: "Grunt", voice: 1 },
+  runner: { hp: 55, speed: 8.4, damage: 7, scale: 0.82, score: 120, attackRange: 18, windup: 0.16, cooldown: 0.55, name: "Sneak", voice: 1.35 },
+  brute: { hp: 440, speed: 3.2, damage: 28, scale: 1.75, score: 400, attackRange: 22, windup: 0.32, cooldown: 1.05, name: "Brute", voice: 0.6 },
   shaman: { hp: 130, speed: 3.5, damage: 16, scale: 1.02, score: 250, attackRange: 26, windup: 0.8, cooldown: 2.6, name: "Shaman", voice: 1.15 },
-  king: { hp: 3600, speed: 3.9, damage: 34, scale: 3.3, score: 5000, attackRange: 5.2, windup: 0.85, cooldown: 1.7, name: "KRAWK THE GOBLIN KING", voice: 0.42 },
+  king: { hp: 3600, speed: 3.9, damage: 34, scale: 3.3, score: 5000, attackRange: 28, windup: 0.45, cooldown: 1.1, name: "KRAWK THE GOBLIN KING", voice: 0.42 },
 };
+
+export const GEEZER: GoblinDef = {
+  hp: 90, speed: 6.6, damage: 8, scale: 1.18, score: 140, attackRange: 32, windup: 0.16, cooldown: 0.48, name: "Emo Geezer", voice: 0.7,
+};
+
+export const HOSTILES: Record<HostileKind, GoblinDef> = { ...GOBLINS, geezer: GEEZER };
 
 type State = "rising" | "chase" | "windup" | "recover" | "dead";
 
 export interface Goblin {
   id: number;
-  kind: GoblinKind;
+  kind: HostileKind;
+  faction: Faction;
   def: GoblinDef;
   rig: GoblinRig;
   pos: THREE.Vector3;
@@ -58,6 +67,7 @@ export interface Goblin {
   tauntT: number;
   losT: number;
   losClear: boolean;
+  targetId: number | "player" | null;
 }
 
 export interface Projectile {
@@ -83,7 +93,7 @@ export class GoblinManager {
   readonly projectiles: Projectile[] = [];
   private nextId = 1;
   onPlayerHit?: (damage: number, from: THREE.Vector3) => void;
-  onKilled?: (g: Goblin) => void;
+  onKilled?: (g: Goblin, by: "player" | "rival") => void;
   onTaunt?: (g: Goblin) => void;
   onSummon?: (x: number, z: number) => void;
 
@@ -101,20 +111,20 @@ export class GoblinManager {
     return this.goblins.filter((g) => g.state !== "dead" && !g.dummy);
   }
 
-  spawn(kind: GoblinKind, x: number, z: number, opts: { dummy?: boolean; instant?: boolean } = {}): Goblin {
-    const def = GOBLINS[kind];
-    const rig = buildGoblin(kind);
+  spawn(kind: HostileKind, x: number, z: number, opts: { dummy?: boolean; instant?: boolean } = {}): Goblin {
+    const def = HOSTILES[kind];
+    const rig = kind === "geezer" ? buildGeezer() : buildGoblin(kind);
     rig.root.scale.setScalar(def.scale);
     rig.root.rotation.order = "YXZ";
     const y = this.collision.groundAt(x, z);
     const g: Goblin = {
-      id: this.nextId++, kind, def, rig,
+      id: this.nextId++, kind, faction: kind === "geezer" ? "geezer" : "goblin", def, rig,
       pos: new THREE.Vector3(x, y, z), yaw: Math.random() * Math.PI * 2, hp: def.hp,
       state: opts.instant ? "chase" : "rising", stateT: 0, phase: Math.random() * 10, hurtT: 0,
       attackCd: 1 + Math.random(), stuckT: 0, lastPos: new THREE.Vector3(x, y, z), sidestep: 0, sidestepT: 0,
       deadVel: new THREE.Vector3(), deadSpin: new THREE.Vector3(), deadT: 0, headless: false, headGib: null,
       headGibVel: new THREE.Vector3(), alerted: false, summonT: 8, dummy: !!opts.dummy, tauntT: 4 + Math.random() * 10,
-      losT: Math.random() * 0.3, losClear: true,
+      losT: Math.random() * 0.3, losClear: true, targetId: "player",
     };
     rig.root.position.copy(g.pos);
     if (!opts.instant) {
@@ -159,31 +169,35 @@ export class GoblinManager {
   }
 
   /** Returns true if this hit killed the goblin. */
-  damage(g: Goblin, amount: number, dir: THREE.Vector3, head: boolean, big: boolean): boolean {
+  damage(g: Goblin, amount: number, dir: THREE.Vector3, head: boolean, big: boolean, by: "player" | "rival" = "player"): boolean {
     if (g.state === "dead") return false;
     g.hp -= amount;
     g.hurtT = 0.25;
     g.alerted = true;
     const dist = g.pos.distanceTo(this.listener);
     if (g.hp > 0) {
-      if (Math.random() < 0.6) this.audio.goblin("hurt", g.def.voice, this.panFor(g.pos), dist);
+      if (Math.random() < 0.6) {
+        if (g.faction === "geezer") this.audio.geezer("hurt", g.def.voice, this.panFor(g.pos), dist);
+        else this.audio.goblin("hurt", g.def.voice, this.panFor(g.pos), dist);
+      }
       if (g.kind !== "king" && g.kind !== "brute") {
         g.pos.addScaledVector(new THREE.Vector3(dir.x, 0, dir.z).normalize(), big ? 0.9 : 0.25);
       }
       return false;
     }
-    this.kill(g, dir, head, big);
+    this.kill(g, dir, head, big, by);
     return true;
   }
 
-  private kill(g: Goblin, dir: THREE.Vector3, head: boolean, big: boolean) {
+  private kill(g: Goblin, dir: THREE.Vector3, head: boolean, big: boolean, by: "player" | "rival" = "player") {
     g.state = "dead";
     g.deadT = 0;
     const force = (big ? 9 : 4.5) / Math.sqrt(g.def.scale);
     g.deadVel.set(dir.x, 0, dir.z).normalize().multiplyScalar(force);
     g.deadVel.y = big ? 5 : 2.5;
     g.deadSpin.set((Math.random() - 0.5) * 4 - 3, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 4);
-    this.audio.goblin("death", g.def.voice, this.panFor(g.pos), g.pos.distanceTo(this.listener));
+    if (g.faction === "geezer") this.audio.geezer("death", g.def.voice, this.panFor(g.pos), g.pos.distanceTo(this.listener));
+    else this.audio.goblin("death", g.def.voice, this.panFor(g.pos), g.pos.distanceTo(this.listener));
     const headPos = new THREE.Vector3();
     g.rig.head.getWorldPosition(headPos);
     if (head && g.kind !== "king") {
@@ -195,12 +209,15 @@ export class GoblinManager {
       this.group.add(gib);
       g.headGib = gib;
       g.headGibVel.copy(dir).multiplyScalar(big ? 14 : 8).add(new THREE.Vector3(0, big ? 8 : 6, 0));
-      this.fx.goo(headPos, new THREE.Vector3(0, 1, 0), 2.2, g.pos.y);
+      if (g.faction === "geezer") this.fx.blood(headPos, new THREE.Vector3(0, 1, 0), 2.2, g.pos.y);
+      else this.fx.goo(headPos, new THREE.Vector3(0, 1, 0), 2.2, g.pos.y);
     } else {
-      this.fx.goo(headPos, dir, 1.4, g.pos.y);
+      if (g.faction === "geezer") this.fx.blood(headPos, dir, 1.4, g.pos.y);
+      else this.fx.goo(headPos, dir, 1.4, g.pos.y);
     }
-    this.fx.gooSplat(g.pos.x + dir.x * 1.2, g.pos.z + dir.z * 1.2, 1.4 * g.def.scale);
-    this.onKilled?.(g);
+    if (g.faction === "geezer") this.fx.bloodSplat(g.pos.x + dir.x * 1.2, g.pos.z + dir.z * 1.2, 1.2 * g.def.scale);
+    else this.fx.gooSplat(g.pos.x + dir.x * 1.2, g.pos.z + dir.z * 1.2, 1.4 * g.def.scale);
+    this.onKilled?.(g, by);
   }
 
   private listener = new THREE.Vector3();
@@ -243,7 +260,10 @@ export class GoblinManager {
         if (k >= 1) {
           g.state = "chase";
           g.stateT = 0;
-          if (Math.random() < 0.5) this.audio.goblin("alert", g.def.voice, this.panFor(g.pos), g.pos.distanceTo(target));
+          if (Math.random() < 0.5) {
+            if (g.faction === "geezer") this.audio.geezer("alert", g.def.voice, this.panFor(g.pos), g.pos.distanceTo(target));
+            else this.audio.goblin("alert", g.def.voice, this.panFor(g.pos), g.pos.distanceTo(target));
+          }
         }
         this.animateLimbs(g, dt, 0.2);
         continue;
@@ -256,7 +276,8 @@ export class GoblinManager {
         continue;
       }
 
-      const dx = target.x - g.pos.x, dz = target.z - g.pos.z;
+      const aim = this.pickTarget(g, player);
+      const dx = aim.x - g.pos.x, dz = aim.z - g.pos.z;
       const dist = Math.hypot(dx, dz);
       const desiredYaw = Math.atan2(-dx, -dz);
       g.yaw = lerpAngle(g.yaw, desiredYaw, 1 - Math.exp(-dt * 8));
@@ -266,25 +287,31 @@ export class GoblinManager {
       if (g.tauntT <= 0 && dist < 40) {
         g.tauntT = 12 + Math.random() * 18;
         if (Math.random() < 0.35) {
-          this.audio.goblin("laugh", g.def.voice, this.panFor(g.pos), dist);
+          if (g.faction === "geezer") this.audio.geezer("laugh", g.def.voice, this.panFor(g.pos), dist);
+          else this.audio.goblin("laugh", g.def.voice, this.panFor(g.pos), dist);
           this.onTaunt?.(g);
         }
       }
 
       let moveSpeed = 0;
-      const ranged = g.kind === "shaman";
+      const revolver = g.kind !== "shaman" || !!aim.rival;
+      const ranged = revolver || g.kind === "shaman";
       if (g.state === "chase") {
-        const preferred = ranged ? 18 : g.def.attackRange * 0.8;
-        const canAttack = ranged
-          ? dist < g.def.attackRange && !this.collision.lineBlocked(g.pos.x, g.pos.y + 1.2 * s, g.pos.z, target.x, target.y + 1.5, target.z)
-          : dist < g.def.attackRange && Math.abs(target.y - g.pos.y) < 2.5 * s;
-        if (canAttack && g.attackCd <= 0 && player.alive) {
+        const preferred = g.kind === "geezer" ? 16 : ranged ? 14 : g.def.attackRange * 0.8;
+        const los = !this.collision.lineBlocked(g.pos.x, g.pos.y + 1.2 * s, g.pos.z, aim.x, aim.y, aim.z);
+        const canAttack = dist < g.def.attackRange && los && (aim.rival || player.alive);
+        if (canAttack && g.attackCd <= 0) {
           g.state = "windup";
           g.stateT = 0;
-          this.audio.goblin("attack", g.def.voice, this.panFor(g.pos), dist);
-        } else if (!ranged || dist > preferred || dist < 10) {
+          if (g.faction === "geezer") this.audio.geezer("attack", g.def.voice, this.panFor(g.pos), dist);
+          else this.audio.goblin("attack", g.def.voice, this.panFor(g.pos), dist);
+        } else if (g.kind === "geezer" || dist > preferred || dist < 9) {
           moveSpeed = g.def.speed * (g.hurtT > 0 ? 0.4 : 1);
-          if (ranged && dist < 10) moveSpeed = -g.def.speed * 0.8;
+          if (ranged && dist < 9 && !aim.rival) moveSpeed = -g.def.speed * 0.75;
+          if (g.kind === "geezer" && dist < preferred) {
+            g.sidestep = g.sidestep || (Math.random() < 0.5 ? -1 : 1);
+            if (g.sidestepT <= 0) g.sidestepT = 1.1 + Math.random();
+          }
         }
         if (g.kind === "king") {
           g.summonT -= dt;
@@ -296,23 +323,23 @@ export class GoblinManager {
         }
       } else if (g.state === "windup") {
         if (g.stateT >= g.def.windup) {
-          this.resolveAttack(g, player, dist, now);
+          this.resolveAttack(g, player, dist, now, aim.rival);
           g.state = "recover";
           g.stateT = 0;
           g.attackCd = g.def.cooldown * (0.8 + Math.random() * 0.4);
         }
       } else if (g.state === "recover") {
-        if (g.stateT > 0.35) { g.state = "chase"; g.stateT = 0; }
+        if (g.stateT > 0.28) { g.state = "chase"; g.stateT = 0; }
       }
 
       if (moveSpeed !== 0 && dist > 0.01) {
         g.losT -= dt;
         if (g.losT <= 0) {
           g.losT = 0.3;
-          g.losClear = !this.collision.lineBlocked(g.pos.x, g.pos.y + 0.8 * s, g.pos.z, target.x, target.y + 0.8, target.z);
+          g.losClear = !this.collision.lineBlocked(g.pos.x, g.pos.y + 0.8 * s, g.pos.z, aim.x, aim.y, aim.z);
         }
         let mx = (dx / dist) * Math.sign(moveSpeed), mz = (dz / dist) * Math.sign(moveSpeed);
-        if (moveSpeed > 0 && !g.losClear) {
+        if (moveSpeed > 0 && !g.losClear && !aim.rival) {
           const f = this.flow.direction(g.pos.x, g.pos.z);
           if (f) {
             mx = f[0];
@@ -359,9 +386,35 @@ export class GoblinManager {
     this.updateProjectiles(dt, player, now);
   }
 
-  private resolveAttack(g: Goblin, player: Player, dist: number, _now: number) {
+  private pickTarget(g: Goblin, player: Player) {
+    const playerDist = Math.hypot(player.pos.x - g.pos.x, player.pos.z - g.pos.z);
+    let best: Goblin | null = null;
+    let bestD = Infinity;
+    for (const o of this.goblins) {
+      if (o === g || o.state === "dead" || o.dummy || o.faction === g.faction) continue;
+      const d = Math.hypot(o.pos.x - g.pos.x, o.pos.z - g.pos.z);
+      if (d < bestD) { bestD = d; best = o; }
+    }
+    const wantRival = !!best && bestD < 44 && (bestD < playerDist + 12 || bestD < 24 || !player.alive);
+    if (wantRival && best) {
+      g.targetId = best.id;
+      return { x: best.pos.x, y: best.pos.y + 1.3 * best.def.scale, z: best.pos.z, rival: best, dist: bestD };
+    }
+    g.targetId = "player";
+    return { x: player.pos.x, y: player.pos.y + 1.5, z: player.pos.z, rival: null as Goblin | null, dist: playerDist };
+  }
+
+  private resolveAttack(g: Goblin, player: Player, dist: number, _now: number, rival: Goblin | null) {
     const s = g.def.scale;
-    if (g.kind === "shaman") {
+    if (!rival && g.kind === "king" && dist < 6.8) {
+      this.fx.ring(g.pos.clone(), 9, 0.55, 0xff6a00);
+      this.fx.soft.emit({ pos: g.pos.clone(), spread: 1, speed: [4, 10], life: [0.6, 1.2], size: [0.6, 2.4], color: 0x7a6a50, color2: 0x3a3020, alpha: 0.7, gravity: 4, count: 40, jitter: 3 });
+      this.audio.explosion(dist);
+      player.shake(0.5);
+      if (player.onGround) this.onPlayerHit?.(g.def.damage, g.pos);
+      return;
+    }
+    if (!rival && g.kind === "shaman") {
       const from = new THREE.Vector3(g.pos.x, g.pos.y + 1.6 * s, g.pos.z);
       const aim = player.eyePos.clone().add(new THREE.Vector3(0, -0.3, 0));
       const vel = aim.sub(from).normalize().multiplyScalar(17);
@@ -372,17 +425,75 @@ export class GoblinManager {
       this.audio.fireball(this.panFor(g.pos));
       return;
     }
-    if (g.kind === "king") {
-      this.fx.ring(g.pos.clone(), 9, 0.55, 0xff6a00);
-      this.fx.soft.emit({ pos: g.pos.clone(), spread: 1, speed: [4, 10], life: [0.6, 1.2], size: [0.6, 2.4], color: 0x7a6a50, color2: 0x3a3020, alpha: 0.7, gravity: 4, count: 40, jitter: 3 });
-      this.audio.explosion(dist);
-      player.shake(0.5);
-      if (dist < 6.5 && player.onGround) this.onPlayerHit?.(g.def.damage, g.pos);
+    this.fireRevolver(g, player, rival);
+  }
+
+  private muzzleWorld(g: Goblin) {
+    const p = new THREE.Vector3();
+    if (g.rig.muzzle) g.rig.muzzle.getWorldPosition(p);
+    else p.set(g.pos.x, g.pos.y + 1.15 * g.def.scale, g.pos.z);
+    return p;
+  }
+
+  private fireRevolver(g: Goblin, player: Player, rival: Goblin | null) {
+    const from = this.muzzleWorld(g);
+    const aim = rival
+      ? new THREE.Vector3(rival.pos.x, rival.pos.y + 1.25 * rival.def.scale, rival.pos.z)
+      : player.eyePos.clone();
+    const dir = aim.sub(from);
+    if (dir.lengthSq() < 0.01) return;
+    dir.normalize();
+    const spread = g.kind === "geezer" ? 0.055 : g.kind === "runner" ? 0.04 : 0.032;
+    const up = new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(dir, up).normalize();
+    dir.applyAxisAngle(up, (Math.random() - 0.5) * spread * 2);
+    dir.applyAxisAngle(right, (Math.random() - 0.5) * spread * 2);
+    dir.normalize();
+
+    const maxDist = 48;
+    let stop = maxDist;
+    const endGuess = from.clone().addScaledVector(dir, maxDist);
+    if (this.collision.lineBlocked(from.x, from.y, from.z, endGuess.x, endGuess.y, endGuess.z)) {
+      stop = Math.min(stop, 18);
+    }
+
+    const dmg = roll22Damage();
+    this.audio.pop22(this.panFor(g.pos), from.distanceTo(this.listener));
+    this.fx.muzzle(from, dir, false);
+
+    const hits = this.raycast(from, dir, stop);
+    for (const h of hits) {
+      if (h.goblin === g || h.goblin.faction === g.faction) continue;
+      this.damage(h.goblin, dmg, dir, h.head, false, "rival");
+      if (h.goblin.faction === "geezer") this.fx.blood(h.point, dir.clone().negate(), 0.55, h.goblin.pos.y);
+      else this.fx.goo(h.point, dir.clone().negate(), 0.45, h.goblin.pos.y);
+      this.fx.tracer(from, h.point, false);
       return;
     }
-    if (dist < g.def.attackRange + 0.4 && Math.abs(player.pos.y - g.pos.y) < 2.2 * s) {
-      this.onPlayerHit?.(g.def.damage, g.pos);
+
+    if (!rival && player.alive) {
+      const hitAt = this.playerRayHit(from, dir, stop, player);
+      if (hitAt) {
+        this.onPlayerHit?.(dmg, from);
+        this.fx.tracer(from, hitAt, false);
+        return;
+      }
     }
+    this.fx.tracer(from, from.clone().addScaledVector(dir, Math.min(stop, 28)), false);
+  }
+
+  private playerRayHit(from: THREE.Vector3, dir: THREE.Vector3, stop: number, player: Player) {
+    const centers = [
+      player.eyePos.clone(),
+      new THREE.Vector3(player.pos.x, player.pos.y + 1.05, player.pos.z),
+    ];
+    for (const c of centers) {
+      const t = c.clone().sub(from).dot(dir);
+      if (t <= 0 || t >= stop) continue;
+      const closest = from.clone().addScaledVector(dir, t);
+      if (closest.distanceTo(c) < 0.62) return closest;
+    }
+    return null;
   }
 
   private updateProjectiles(dt: number, player: Player, _now: number) {
@@ -423,16 +534,17 @@ export class GoblinManager {
 
     if (g.state === "windup") {
       const k = Math.min(1, g.stateT / g.def.windup);
-      r.armR.rotation.x = -2.6 * easeOut(k);
-      r.armR.rotation.z = 0.3 * k;
+      r.armR.rotation.x = -1.55 * easeOut(k);
+      r.armR.rotation.z = 0.18 * k;
       r.jaw.rotation.x = 0.5;
       r.eyeMat.emissiveIntensity = 4 + k * 8;
     } else if (g.state === "recover") {
-      const k = Math.min(1, g.stateT / 0.15);
-      r.armR.rotation.x = -2.6 + 3.6 * easeOut(k);
+      const k = Math.min(1, g.stateT / 0.12);
+      r.armR.rotation.x = -1.55 + 0.35 * easeOut(k);
       r.eyeMat.emissiveIntensity = 4;
     } else {
-      r.armR.rotation.x += (sw * 0.8 - r.armR.rotation.x) * 0.2;
+      const hold = -1.05 - Math.min(1, speed01) * 0.15;
+      r.armR.rotation.x += (hold - r.armR.rotation.x) * 0.18;
       r.armR.rotation.z *= 0.9;
     }
   }
@@ -460,7 +572,8 @@ export class GoblinManager {
       if (g.headless && g.deadT < 1.2) {
         const neck = new THREE.Vector3();
         r.torso.getWorldPosition(neck);
-        this.fx.goo(neck.add(new THREE.Vector3(0, 0.4 * g.def.scale, 0)), new THREE.Vector3(0, 1, 0), 0.25, ground);
+        if (g.faction === "geezer") this.fx.blood(neck.add(new THREE.Vector3(0, 0.4 * g.def.scale, 0)), new THREE.Vector3(0, 1, 0), 0.25, ground);
+        else this.fx.goo(neck.add(new THREE.Vector3(0, 0.4 * g.def.scale, 0)), new THREE.Vector3(0, 1, 0), 0.25, ground);
       }
     } else if (g.deadT > 4) {
       g.pos.y -= dt * 0.6;
