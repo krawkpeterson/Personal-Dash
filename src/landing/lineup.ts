@@ -1,16 +1,17 @@
 import * as THREE from "three";
-import { buildGoblin, type GoblinKind, type GoblinRig } from "../play/enemies/goblinModel.ts";
-import { GOBLINS } from "../play/enemies/goblins.ts";
+import { buildGoblin, type GoblinRig, type HostileKind } from "../play/enemies/goblinModel.ts";
+import { buildGeezer } from "../play/enemies/geezerModel.ts";
+import { HOSTILES } from "../play/enemies/goblins.ts";
 
-const ORDER: GoblinKind[] = ["runner", "grunt", "shaman", "brute", "king"];
+const ORDER: HostileKind[] = ["runner", "grunt", "geezer", "shaman", "brute", "king"];
 
 /** Turntable lineup of the real in-game goblin rigs for the bestiary section. */
 export class GoblinLineup {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
-  private rigs: { kind: GoblinKind; rig: GoblinRig; x: number; phase: number }[] = [];
-  private focus: GoblinKind | null = null;
+  private rigs: { kind: HostileKind; rig: GoblinRig; x: number; phase: number }[] = [];
+  private focus: HostileKind | null = null;
   private raf = 0;
   private visible = false;
   private t0 = performance.now();
@@ -48,10 +49,10 @@ export class GoblinLineup {
     ring.position.y = 0.01;
     this.scene.add(ring);
 
-    const xs = [-8.2, -4.6, -1.0, 3.0, 8.4];
+    const xs = [-9.4, -6.0, -2.8, 0.4, 3.6, 8.6];
     ORDER.forEach((kind, i) => {
-      const rig = buildGoblin(kind);
-      const s = GOBLINS[kind].scale;
+      const rig = kind === "geezer" ? buildGeezer() : buildGoblin(kind);
+      const s = HOSTILES[kind].scale;
       rig.root.scale.setScalar(s);
       rig.root.position.set(xs[i], 0, kind === "king" ? -2.5 : 0);
       rig.root.traverse((o) => {
@@ -73,7 +74,7 @@ export class GoblinLineup {
     this.resize();
   }
 
-  setFocus(kind: GoblinKind | null) {
+  setFocus(kind: HostileKind | null) {
     this.focus = kind;
   }
 
