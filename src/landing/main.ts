@@ -1,5 +1,5 @@
 import "./landing.css";
-import type { GoblinKind } from "../play/enemies/goblinModel.ts";
+import type { HostileKind } from "../play/enemies/goblinModel.ts";
 import { AudioEngine, type GunKind } from "../play/audio/audio.ts";
 import { fetchHealth, fetchLeaderboard, lookupZip } from "../play/net/api.ts";
 import { ContourFlyover } from "../play/ui/menuBackground.ts";
@@ -158,7 +158,7 @@ const lineup = new GoblinLineup($<HTMLCanvasElement>(".lineup-canvas"));
 for (const foe of $$(".foe")) {
   foe.addEventListener("pointerenter", () => {
     $$(".foe").forEach((f) => f.classList.toggle("on", f === foe));
-    lineup.setFocus(foe.dataset.kind as GoblinKind);
+    lineup.setFocus(foe.dataset.kind as HostileKind);
   });
 }
 $(".lineup-cards").addEventListener("pointerleave", () => {
