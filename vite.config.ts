@@ -18,6 +18,7 @@ export default defineConfig({
       input: {
         landing: resolve(import.meta.dirname, "index.html"),
         play: resolve(import.meta.dirname, "play.html"),
+        seth: resolve(import.meta.dirname, "seth.html"),
       },
     },
   },
