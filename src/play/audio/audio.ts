@@ -305,6 +305,56 @@ export class AudioEngine {
     }
   }
 
+  pop22(x = 0, distance = 10) {
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const vol = Math.max(0.06, 0.38 * (1 - distance / 70));
+    const out = ctx.createGain();
+    out.gain.value = vol;
+    out.connect(this.pan(x)).connect(this.sfx);
+    const n = this.noiseSrc();
+    const bp = ctx.createBiquadFilter();
+    bp.type = "bandpass";
+    bp.frequency.value = 2400 + Math.random() * 800;
+    bp.Q.value = 1.6;
+    const g = ctx.createGain();
+    this.env(g, t, 1.1, 0.001, 0.045);
+    n.connect(bp).connect(g).connect(out);
+    n.start(t, Math.random() * 3);
+    n.stop(t + 0.12);
+    this.click(t, 3200 + Math.random() * 600, 0.22, 0.012);
+  }
+
+  geezer(kind: "alert" | "hurt" | "death" | "laugh" | "attack", pitch = 1, x = 0, distance = 10) {
+    const ctx = this.ctx;
+    const t = ctx.currentTime;
+    const vol = Math.max(0.05, 0.48 * (1 - distance / 90));
+    const out = ctx.createGain();
+    out.gain.value = vol;
+    out.connect(this.pan(x)).connect(this.sfx);
+    const voice = (start: number, f0: number, f1: number, dur: number, peak = 1) => {
+      const o = ctx.createOscillator();
+      o.type = "triangle";
+      o.frequency.setValueAtTime(f0 * pitch, start);
+      o.frequency.exponentialRampToValueAtTime(Math.max(40, f1 * pitch), start + dur);
+      const g = ctx.createGain();
+      this.env(g, start, peak, 0.03, dur);
+      const f = ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.value = 700 * pitch;
+      o.connect(f).connect(g).connect(out);
+      o.start(start);
+      o.stop(start + dur + 0.08);
+    };
+    switch (kind) {
+      case "alert": voice(t, 180, 340, 0.5); break;
+      case "attack": voice(t, 260, 160, 0.18, 0.9); break;
+      case "hurt": voice(t, 320, 140, 0.22, 1); break;
+      case "death": voice(t, 280, 70, 1.1, 1.2); break;
+      case "laugh": for (let i = 0; i < 3; i++) voice(t + i * 0.16, 240 - i * 12, 200 - i * 10, 0.12, 0.7); break;
+    }
+  }
+
   goblin(kind: "alert" | "hurt" | "death" | "laugh" | "attack", pitch = 1, x = 0, distance = 10) {
     const ctx = this.ctx;
     const t = ctx.currentTime;
