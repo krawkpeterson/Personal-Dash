@@ -3,7 +3,7 @@ import type { Vec2, WorldData } from "../../../shared/types.ts";
 import type { AudioEngine } from "../audio/audio.ts";
 import type { Input } from "../engine/input.ts";
 import { Renderer } from "../engine/renderer.ts";
-import type { GoblinKind } from "../enemies/goblinModel.ts";
+import type { GoblinKind, HostileKind } from "../enemies/goblinModel.ts";
 import { GoblinManager, type Goblin } from "../enemies/goblins.ts";
 import { Effects } from "../fx/effects.ts";
 import { Player } from "../player/player.ts";
@@ -55,7 +55,7 @@ export class Game {
   phase: Phase = "intro";
   private phaseT = 0;
   wave = 0;
-  private spawnQueue: GoblinKind[] = [];
+  private spawnQueue: HostileKind[] = [];
   private spawnT = 0;
   private bossSpawned = false;
   private boss: Goblin | null = null;
@@ -139,7 +139,9 @@ export class Game {
     audio.setEnvironment(Math.min(1, world.stats.buildings / 800));
 
     this.goblins.onPlayerHit = (dmg, from) => this.hurtPlayer(dmg, from);
-    this.goblins.onKilled = () => {};
+    this.goblins.onKilled = (g, by) => {
+      if (by === "rival") this.onGoblinKilled(g, false, "m1911", 10, 1, false, true);
+    };
     this.goblins.onTaunt = (g) => {
       const t = world.director.taunts;
       if (t.length) this.hud.killfeed(`<em>${g.def.name.toUpperCase()}</em>“${t[Math.floor(Math.random() * t.length)]}”`, false);
@@ -250,7 +252,7 @@ export class Game {
     this.hud.setSpread(4 + w.spread * 500 + moving * 10 + (this.player.onGround ? 0 : 10), w.adsAmount > 0.6);
     this.hud.drawMinimap(
       this.player.pos.x, this.player.pos.z, this.player.yaw,
-      this.goblins.goblins.filter((x) => x.state !== "dead").map((x) => ({ x: x.pos.x, z: x.pos.z, boss: x.kind === "king" })),
+      this.goblins.goblins.filter((x) => x.state !== "dead").map((x) => ({ x: x.pos.x, z: x.pos.z, boss: x.kind === "king", geezer: x.kind === "geezer" })),
       this.pickups.items.map((p) => ({ x: p.pos.x, z: p.pos.z })),
     );
     if (this.boss && this.boss.state !== "dead") this.hud.bossBar(this.boss.def.name, this.boss.hp / this.boss.def.hp);
@@ -291,7 +293,8 @@ export class Game {
       const falloff = h.dist > 60 ? Math.max(0.6, 1 - (h.dist - 60) / 200) : 1;
       const dmg = damage * falloff * (h.head ? e.def.headMult : 1);
       const killed = this.goblins.damage(h.goblin, dmg, e.dir, h.head, big);
-      this.fx.goo(h.point, e.dir.clone().negate().lerp(e.dir, 0.7), killed ? 1.3 : 0.7, h.goblin.pos.y);
+      if (h.goblin.faction === "geezer") this.fx.blood(h.point, e.dir.clone().negate().lerp(e.dir, 0.7), killed ? 1.3 : 0.7, h.goblin.pos.y);
+      else this.fx.goo(h.point, e.dir.clone().negate().lerp(e.dir, 0.7), killed ? 1.3 : 0.7, h.goblin.pos.y);
       this.audio.impact("flesh", 0);
       this.audio.hitmarker(h.head);
       this.hud.hitmarker(killed ? "kill" : h.head ? "head" : "hit");
@@ -358,31 +361,39 @@ export class Game {
     if (dist < radius * 0.7 && this.phase !== "tutorial") this.hurtPlayer(35 * (1 - dist / (radius * 0.7)), pos);
   }
 
-  private onGoblinKilled(g: Goblin, head: boolean, weapon: "m1911" | "anaconda", dist: number, killsThisShot: number, explosive = false) {
-    this.tutorial?.notifyKill(g, head, weapon);
+  private onGoblinKilled(g: Goblin, head: boolean, weapon: "m1911" | "anaconda", dist: number, killsThisShot: number, explosive = false, rival = false) {
+    if (!rival) this.tutorial?.notifyKill(g, head, weapon);
     if (g.dummy) {
       this.hud.killfeed(`${head ? "HEADSHOT" : "DUMMY"} <em>${weapon === "anaconda" ? ".44 MAG" : ".45 ACP"}</em>`, head);
       return;
     }
     this.stats.kills++;
     if (head) this.stats.headshots++;
-    this.streak++;
-    this.multiCount = this.multiT > 0 ? this.multiCount + 1 : 1;
-    this.multiT = 1.8;
-    this.combo = Math.min(8, this.comboT > 0 ? this.combo + 1 : 1);
-    this.comboT = 4;
+    if (!rival) {
+      this.streak++;
+      this.multiCount = this.multiT > 0 ? this.multiCount + 1 : 1;
+      this.multiT = 1.8;
+      this.combo = Math.min(8, this.comboT > 0 ? this.combo + 1 : 1);
+      this.comboT = 4;
+    }
 
     let pts = g.def.score;
     const tags: string[] = [];
+    if (rival) { pts = Math.round(pts * 0.45); tags.push("CIVIL WAR"); }
     if (head) { pts *= 1.5; tags.push("HEADSHOT"); }
     if (killsThisShot > 1 && !explosive) { pts += 250 * (killsThisShot - 1); tags.push("COLLATERAL"); }
     if (dist > 45) { pts += 150; tags.push("LONGSHOT"); }
     if (explosive) { pts += 100; tags.push("KABOOM"); }
-    pts = Math.round(pts * this.combo);
+    pts = Math.round(pts * (rival ? 1 : this.combo));
     this.stats.score += pts;
 
-    const weaponTag = explosive ? "CAR BOMB" : weapon === "anaconda" ? ".44 MAG" : ".45 ACP";
+    const weaponTag = rival ? ".22 CIVIL WAR" : explosive ? "CAR BOMB" : weapon === "anaconda" ? ".44 MAG" : ".45 ACP";
     this.hud.killfeed(`${g.def.name} <em>${weaponTag}${head ? " ✛" : ""}</em>+${pts}`, head);
+
+    if (rival) {
+      if (Math.random() < 0.22) this.pickups.drop("health", g.pos.x, g.pos.z);
+      return;
+    }
 
     this.stats.bestMulti = Math.max(this.stats.bestMulti, this.multiCount);
     if (this.multiCount >= 2) {
@@ -517,20 +528,23 @@ export class Game {
     this.hud.setWave(n, this.world.director.waves);
     const count = this.world.director.goblinsPerWave + (n - 1) * 3;
     this.spawnQueue = [];
+    let geezers = 0;
     for (let i = 0; i < count; i++) {
       const r = Math.random();
-      let k: GoblinKind = "grunt";
-      if (n >= 2 && r < 0.22) k = "runner";
-      else if (n >= 3 && r < 0.36) k = "shaman";
-      else if (n >= 2 && r < 0.36 + n * 0.025) k = "brute";
+      let k: HostileKind = "grunt";
+      if (r < 0.28) { k = "geezer"; geezers++; }
+      else if (n >= 2 && r < 0.46) k = "runner";
+      else if (n >= 3 && r < 0.58) k = "shaman";
+      else if (n >= 2 && r < 0.58 + n * 0.025) k = "brute";
       this.spawnQueue.push(k);
     }
     this.spawnT = 0.5;
     this.audio.goblin("alert", 0.9, 0, 30);
-    this.hud.announce(`WAVE ${n}`, `${count} GOBLINS INBOUND`, "");
+    const sub = geezers ? `${count - geezers} GOBLINS · ${geezers} EMO GEEZERS` : `${count} GOBLINS INBOUND`;
+    this.hud.announce(`WAVE ${n}`, sub, "");
   }
 
-  private spawnFromZones(kind: GoblinKind): Goblin {
+  private spawnFromZones(kind: HostileKind): Goblin {
     const zones = this.world.director.spawnZones;
     const p = this.player.pos;
     const candidates = zones
@@ -547,7 +561,7 @@ export class Game {
     return this.spawnNear(kind, base[0], base[1], 8);
   }
 
-  private spawnNear(kind: GoblinKind, x: number, z: number, spread: number): Goblin {
+  private spawnNear(kind: HostileKind, x: number, z: number, spread: number): Goblin {
     const lim = this.terrain.half - 6;
     let sx = x, sz = z;
     for (let i = 0; i < 25; i++) {
@@ -592,7 +606,7 @@ export class Game {
   }
 
   /** Dev hooks used to capture marketing screenshots. */
-  debugSpawn(kind: GoblinKind, dist: number, angle = 0) {
+  debugSpawn(kind: HostileKind, dist: number, angle = 0) {
     const yaw = this.player.yaw + angle;
     return this.spawnNear(kind, this.player.pos.x - Math.sin(yaw) * dist, this.player.pos.z - Math.cos(yaw) * dist, 1);
   }
